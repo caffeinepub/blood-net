@@ -1,0 +1,117 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/assets/fonts/PlusJakartaSans.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Figtree";
+  src: url("/assets/fonts/Figtree.woff2") format("woff2");
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+
+    /* Blood Net Design System */
+    /* Primary blood red: oklch(0.5271 0.2215 27) ≈ #DC2626 */
+    /* Dark navy: oklch(0.1725 0.0273 264) ≈ #0F172A */
+    /* Page bg: oklch(0.9612 0.0034 247) ≈ #F3F4F6 */
+
+    --background: 0.9612 0.0034 247;
+    --foreground: 0.1725 0.0273 264;
+
+    --card: 1 0 0;
+    --card-foreground: 0.1725 0.0273 264;
+
+    --popover: 1 0 0;
+    --popover-foreground: 0.1725 0.0273 264;
+
+    /* primary = dark navy */
+    --primary: 0.1725 0.0273 264;
+    --primary-foreground: 1 0 0;
+
+    /* secondary = light gray */
+    --secondary: 0.9612 0.0034 247;
+    --secondary-foreground: 0.1725 0.0273 264;
+
+    --muted: 0.9612 0.0034 247;
+    --muted-foreground: 0.5556 0.0134 247;
+
+    --accent: 0.9612 0.0034 247;
+    --accent-foreground: 0.1725 0.0273 264;
+
+    /* destructive = blood red */
+    --destructive: 0.5271 0.2215 27;
+    --destructive-foreground: 1 0 0;
+
+    --border: 0.9034 0.0068 247;
+    --input: 0.9034 0.0068 247;
+    --ring: 0.5271 0.2215 27;
+
+    --chart-1: 0.5271 0.2215 27;
+    --chart-2: 0.1725 0.0273 264;
+    --chart-3: 0.64 0.15 160;
+    --chart-4: 0.7 0.15 80;
+    --chart-5: 0.56 0.18 300;
+
+    --sidebar: 0.1725 0.0273 264;
+    --sidebar-foreground: 1 0 0;
+    --sidebar-primary: 0.5271 0.2215 27;
+    --sidebar-primary-foreground: 1 0 0;
+    --sidebar-accent: 0.23 0.035 264;
+    --sidebar-accent-foreground: 1 0 0;
+    --sidebar-border: 0 0 0 / 20%;
+    --sidebar-ring: 0.5271 0.2215 27;
+
+    /* Custom tokens */
+    --blood-red: 0.5271 0.2215 27;
+    --navy: 0.1725 0.0273 264;
+    --navy-hover: 0.23 0.035 264;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body;
+  }
+
+  html {
+    color-scheme: light;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-primary text-primary-foreground rounded-full px-5 py-2.5 font-semibold text-sm transition-all hover:opacity-90 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply bg-destructive text-destructive-foreground rounded-full px-5 py-2.5 font-semibold text-sm transition-all hover:opacity-90 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-foreground border border-border rounded-full px-5 py-2.5 font-semibold text-sm transition-all hover:bg-secondary active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .form-input {
+    @apply w-full rounded-xl border border-border bg-white px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-all;
+  }
+
+  .card-base {
+    @apply bg-card border border-border rounded-xl shadow-sm;
+  }
+}

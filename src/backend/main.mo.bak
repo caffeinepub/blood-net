@@ -1,0 +1,1093 @@
+import Map "mo:core/Map";
+import Nat "mo:core/Nat";
+import Time "mo:core/Time";
+import Runtime "mo:core/Runtime";
+import Iter "mo:core/Iter";
+import Text "mo:core/Text";
+import Array "mo:core/Array";
+import Order "mo:core/Order";
+import Principal "mo:core/Principal";
+import MixinAuthorization "authorization/MixinAuthorization";
+import AccessControl "authorization/access-control";
+
+actor {
+  // -------------------------------------------------- COMPONENTS -------------------------------------------------- //
+  let accessControlState = AccessControl.initState();
+  include MixinAuthorization(accessControlState);
+
+  // -------------------------------------------------- DTOs & Modules -------------------------------------------------- //
+
+  type DistrictDto = {
+    id : Nat;
+    name : Text;
+    isAssigned : Bool;
+  };
+
+  type AreaDto = {
+    id : Nat;
+    districtId : Nat;
+    name : Text;
+    isAssigned : Bool;
+  };
+
+  type DistrictManagerStatus = {
+    #pending;
+    #approved;
+    #rejected;
+  };
+
+  type DonorStatus = {
+    #available;
+    #appointed;
+    #tempRejected;
+    #permRejected;
+  };
+
+  type DistrictManagerDto = {
+    id : Nat;
+    username : Text;
+    contact : Text;
+    passwordHash : Text;
+    districtId : Nat;
+    status : DistrictManagerStatus;
+  };
+
+  module DistrictManagerDto {
+    public func compare(d1 : DistrictManagerDto, d2 : DistrictManagerDto) : Order.Order {
+      Nat.compare(d1.id, d2.id);
+    };
+  };
+
+  type AreaManagerStatus = {
+    #pending;
+    #approved;
+    #rejected;
+  };
+
+  type AreaManagerDto = {
+    id : Nat;
+    username : Text;
+    contact : Text;
+    passwordHash : Text;
+    districtId : Nat;
+    areaId : Nat;
+    status : AreaManagerStatus;
+  };
+
+  type DonorDto = {
+    id : Nat;
+    name : Text;
+    contact : Text;
+    bloodGroup : Text;
+    districtId : Nat;
+    areaId : Nat;
+    age : Nat;
+    lastDonatedDate : ?Int;
+    status : DonorStatus;
+    rejectedAt : ?Int;
+    appointedAt : ?Int;
+    patientName : ?Text;
+    areaManagerId : Nat;
+  };
+
+  module DonorDto {
+    public func compare(d1 : DonorDto, d2 : DonorDto) : Order.Order {
+      Nat.compare(d1.id, d2.id);
+    };
+  };
+
+  type UserDto = {
+    id : Nat;
+    username : Text;
+    contact : Text;
+    passwordHash : Text;
+    districtId : Nat;
+  };
+
+  public type UserProfile = {
+    userId : ?Nat;
+    dmId : ?Nat;
+    amId : ?Nat;
+    role : Text;
+    name : Text;
+  };
+
+  type BloodRequestStatus = {
+    #pending;
+    #forwarded;
+    #completed;
+  };
+
+  type BloodRequestDto = {
+    id : Nat;
+    fromRole : Text;
+    fromId : Nat;
+    toRole : Text;
+    toId : Nat;
+    patientName : Text;
+    age : Nat;
+    bloodGroup : Text;
+    hospitalName : Text;
+    hospitalAddress : Text;
+    attenderName : Text;
+    contact : Text;
+    altContact : ?Text;
+    operationDate : Text;
+    status : BloodRequestStatus;
+    createdAt : Int;
+  };
+
+  type NoticeDto = {
+    id : Nat;
+    fromRole : Text;
+    fromId : Nat;
+    toRole : Text;
+    toId : ?Nat;
+    message : Text;
+    createdAt : Int;
+  };
+
+  // -------------------------------------------------- USER PROFILES -------------------------------------------------- //
+  let userProfiles = Map.empty<Principal, UserProfile>();
+
+  public query ({ caller }) func getCallerUserProfile() : async ?UserProfile {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can access profiles");
+    };
+    userProfiles.get(caller);
+  };
+
+  public query ({ caller }) func getUserProfile(user : Principal) : async ?UserProfile {
+    if (caller != user and not AccessControl.isAdmin(accessControlState, caller)) {
+      Runtime.trap("Unauthorized: Can only view your own profile");
+    };
+    userProfiles.get(user);
+  };
+
+  public shared ({ caller }) func saveCallerUserProfile(profile : UserProfile) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only users can save profiles");
+    };
+    userProfiles.add(caller, profile);
+  };
+
+  // -------------------------------------------------- PRINCIPAL MAPPINGS -------------------------------------------------- //
+  let dmPrincipals = Map.empty<Nat, Principal>();
+  let amPrincipals = Map.empty<Nat, Principal>();
+  let userPrincipals = Map.empty<Nat, Principal>();
+
+  // -------------------------------------------------- DISTRICTS -------------------------------------------------- //
+  let districts = Map.empty<Nat, DistrictDto>();
+  var districtIdCounter = 0;
+
+  // CEO uses frontend-only auth (username/password), so no ICP-level permission check needed
+  public shared ({ caller }) func createDistrict(name : Text) : async DistrictDto {
+    let id = districtIdCounter;
+    let district : DistrictDto = {
+      id;
+      name;
+      isAssigned = false;
+    };
+    districts.add(id, district);
+    districtIdCounter += 1;
+    district;
+  };
+
+  public query ({ caller }) func getDistrict(id : Nat) : async DistrictDto {
+    switch (districts.get(id)) {
+      case (null) { Runtime.trap("District not found") };
+      case (?district) { district };
+    };
+  };
+
+  public query ({ caller }) func getDistricts() : async [DistrictDto] {
+    districts.values().toArray();
+  };
+
+  // -------------------------------------------------- AREAS -------------------------------------------------- //
+  let areas = Map.empty<Nat, AreaDto>();
+  var areaIdCounter = 0;
+
+  public shared func createArea(dmId : Nat, districtId : Nat, name : Text) : async AreaDto {
+    // DMs use password auth (anonymous principal), so dmId is passed directly from frontend session
+    switch (districtManagers.get(dmId)) {
+      case (null) {
+        Runtime.trap("District Manager not found");
+      };
+      case (?dm) {
+        if (dm.districtId != districtId) {
+          Runtime.trap("Unauthorized: Can only create areas in your own district");
+        };
+        if (dm.status != #approved) {
+          Runtime.trap("Unauthorized: Only approved District Managers can create areas");
+        };
+
+        let id = areaIdCounter;
+        let area : AreaDto = {
+          id;
+          districtId;
+          name;
+          isAssigned = false;
+        };
+        areas.add(id, area);
+        areaIdCounter += 1;
+        area;
+      };
+    };
+  };
+
+  public query ({ caller }) func getArea(id : Nat) : async AreaDto {
+    switch (areas.get(id)) {
+      case (null) { Runtime.trap("Area not found") };
+      case (?area) { area };
+    };
+  };
+
+  public query ({ caller }) func getAreasByDistrict(districtId : Nat) : async [AreaDto] {
+    areas.values().toArray().filter(func(area) { area.districtId == districtId });
+  };
+
+  // -------------------------------------------------- DISTRICT MANAGERS -------------------------------------------------- //
+  let districtManagers = Map.empty<Nat, DistrictManagerDto>();
+  var districtManagerIdCounter = 0;
+
+  public shared ({ caller }) func registerDistrictManager(username : Text, contact : Text, passwordHash : Text, districtId : Nat) : async DistrictManagerDto {
+    let id = districtManagerIdCounter;
+    let dm : DistrictManagerDto = {
+      id;
+      username;
+      contact;
+      passwordHash;
+      districtId;
+      status = #pending;
+    };
+    districtManagers.add(id, dm);
+    dmPrincipals.add(id, caller);
+    districtManagerIdCounter += 1;
+    dm;
+  };
+
+  // CEO uses frontend-only auth, no ICP-level permission check needed
+  public shared ({ caller }) func approveDistrictManager(dmId : Nat) : async DistrictManagerDto {
+    switch (districtManagers.get(dmId)) {
+      case (null) { Runtime.trap("District Manager not found") };
+      case (?dm) {
+        // Lock the district
+        switch (districts.get(dm.districtId)) {
+          case (null) { Runtime.trap("District not found") };
+          case (?district) {
+            let updatedDistrict = { district with isAssigned = true };
+            districts.add(dm.districtId, updatedDistrict);
+          };
+        };
+
+        let updatedDM = { dm with status = #approved };
+        districtManagers.add(dmId, updatedDM);
+        updatedDM;
+      };
+    };
+  };
+
+  // CEO uses frontend-only auth, no ICP-level permission check needed
+  public shared ({ caller }) func rejectDistrictManager(dmId : Nat) : async DistrictManagerDto {
+    switch (districtManagers.get(dmId)) {
+      case (null) { Runtime.trap("District Manager not found") };
+      case (?dm) {
+        let updatedDM = { dm with status = #rejected };
+        districtManagers.add(dmId, updatedDM);
+        updatedDM;
+      };
+    };
+  };
+
+  // CEO uses frontend-only auth, no ICP-level permission check needed
+  public shared ({ caller }) func deleteDistrictManager(dmId : Nat) : async () {
+    switch (districtManagers.get(dmId)) {
+      case (null) { Runtime.trap("District Manager not found") };
+      case (?dm) {
+        // Free the district
+        switch (districts.get(dm.districtId)) {
+          case (null) {};
+          case (?district) {
+            let updatedDistrict = { district with isAssigned = false };
+            districts.add(dm.districtId, updatedDistrict);
+          };
+        };
+        districtManagers.remove(dmId);
+        dmPrincipals.remove(dmId);
+      };
+    };
+  };
+
+  public query ({ caller }) func getDistrictManager(dmId : Nat) : async DistrictManagerDto {
+    switch (districtManagers.get(dmId)) {
+      case (null) { Runtime.trap("District Manager not found") };
+      case (?dm) { dm };
+    };
+  };
+
+  // CEO uses frontend-only auth, no ICP-level permission check needed
+  public query ({ caller }) func getPendingDistrictManagers() : async [DistrictManagerDto] {
+    districtManagers.values().toArray().filter(func(dm) { dm.status == #pending });
+  };
+
+  public query ({ caller }) func getApprovedDistrictManagers() : async [DistrictManagerDto] {
+    districtManagers.values().toArray().filter(func(dm) { dm.status == #approved });
+  };
+
+  // -------------------------------------------------- AREA MANAGERS -------------------------------------------------- //
+  let areaManagers = Map.empty<Nat, AreaManagerDto>();
+  var areaManagerIdCounter = 0;
+
+  public shared ({ caller }) func registerAreaManager(username : Text, contact : Text, passwordHash : Text, districtId : Nat, areaId : Nat) : async AreaManagerDto {
+    let id = areaManagerIdCounter;
+    let am : AreaManagerDto = {
+      id;
+      username;
+      contact;
+      passwordHash;
+      districtId;
+      areaId;
+      status = #pending;
+    };
+    areaManagers.add(id, am);
+    amPrincipals.add(id, caller);
+    areaManagerIdCounter += 1;
+    am;
+  };
+
+  public shared func approveAreaManager(dmId : Nat, amId : Nat) : async AreaManagerDto {
+    // DMs use password auth (anonymous principal), so dmId is passed directly from frontend session
+    switch (districtManagers.get(dmId)) {
+      case (null) {
+        Runtime.trap("District Manager not found");
+      };
+      case (?dm) {
+        if (dm.status != #approved) {
+          Runtime.trap("Unauthorized: Only approved District Managers can approve AMs");
+        };
+
+        switch (areaManagers.get(amId)) {
+          case (null) { Runtime.trap("Area Manager not found") };
+          case (?am) {
+            // Verify AM is in DM's district
+            if (am.districtId != dm.districtId) {
+              Runtime.trap("Unauthorized: Can only approve Area Managers in your district");
+            };
+
+            // Lock the area
+            switch (areas.get(am.areaId)) {
+              case (null) { Runtime.trap("Area not found") };
+              case (?area) {
+                let updatedArea = { area with isAssigned = true };
+                areas.add(am.areaId, updatedArea);
+              };
+            };
+
+            let updatedAM = { am with status = #approved };
+            areaManagers.add(amId, updatedAM);
+            updatedAM;
+          };
+        };
+      };
+    };
+  };
+
+  public shared func rejectAreaManager(dmId : Nat, amId : Nat) : async AreaManagerDto {
+    // DMs use password auth (anonymous principal), so dmId is passed directly from frontend session
+    switch (districtManagers.get(dmId)) {
+      case (null) {
+        Runtime.trap("District Manager not found");
+      };
+      case (?dm) {
+        if (dm.status != #approved) {
+          Runtime.trap("Unauthorized: Only approved District Managers can reject AMs");
+        };
+
+        switch (areaManagers.get(amId)) {
+          case (null) { Runtime.trap("Area Manager not found") };
+          case (?am) {
+            // Verify AM is in DM's district
+            if (am.districtId != dm.districtId) {
+              Runtime.trap("Unauthorized: Can only reject Area Managers in your district");
+            };
+
+            let updatedAM = { am with status = #rejected };
+            areaManagers.add(amId, updatedAM);
+            updatedAM;
+          };
+        };
+      };
+    };
+  };
+
+  public shared func deleteAreaManager(dmId : Nat, amId : Nat) : async () {
+    // DMs use password auth (anonymous principal), so dmId is passed directly from frontend session
+    switch (districtManagers.get(dmId)) {
+      case (null) { Runtime.trap("District Manager not found") };
+      case (?dm) {
+        if (dm.status != #approved) {
+          Runtime.trap("Unauthorized: Only approved District Managers can delete Area Managers");
+        };
+
+        switch (areaManagers.get(amId)) {
+          case (null) { Runtime.trap("Area Manager not found") };
+          case (?am) {
+            if (am.districtId != dm.districtId) {
+              Runtime.trap("Unauthorized: Can only delete Area Managers in your district");
+            };
+
+            // Free the area
+            switch (areas.get(am.areaId)) {
+              case (null) {};
+              case (?area) {
+                let updatedArea = { area with isAssigned = false };
+                areas.add(am.areaId, updatedArea);
+              };
+            };
+
+            areaManagers.remove(amId);
+            amPrincipals.remove(amId);
+          };
+        };
+      };
+    };
+  };
+
+  public query ({ caller }) func getAreaManager(amId : Nat) : async AreaManagerDto {
+    switch (areaManagers.get(amId)) {
+      case (null) { Runtime.trap("Area Manager not found") };
+      case (?am) { am };
+    };
+  };
+
+  public query func getPendingAreaManagersForDistrict(districtId : Nat) : async [AreaManagerDto] {
+    // No principal check needed; district ID scopes results
+    areaManagers.values().toArray().filter(func(am) {
+      am.districtId == districtId and am.status == #pending
+    });
+  };
+
+  public query ({ caller }) func getApprovedAreaManagersByDistrict(districtId : Nat) : async [AreaManagerDto] {
+    areaManagers.values().toArray().filter(func(am) {
+      am.districtId == districtId and am.status == #approved
+    });
+  };
+
+  // -------------------------------------------------- USERS -------------------------------------------------- //
+  let users = Map.empty<Nat, UserDto>();
+  var userIdCounter = 0;
+
+  public shared ({ caller }) func registerUser(username : Text, contact : Text, passwordHash : Text, districtId : Nat) : async UserDto {
+    let id = userIdCounter;
+    let user : UserDto = {
+      id;
+      username;
+      contact;
+      passwordHash;
+      districtId;
+    };
+    users.add(id, user);
+    userPrincipals.add(id, caller);
+    userIdCounter += 1;
+    user;
+  };
+
+  public query ({ caller }) func getUser(userId : Nat) : async UserDto {
+    switch (users.get(userId)) {
+      case (null) { Runtime.trap("User not found") };
+      case (?user) { user };
+    };
+  };
+
+  // -------------------------------------------------- DONORS -------------------------------------------------- //
+  let donors = Map.empty<Nat, DonorDto>();
+  var donorIdCounter = 0;
+
+  public shared ({ caller }) func addDonor(name : Text, contact : Text, bloodGroup : Text, districtId : Nat, areaId : Nat, age : Nat, lastDonatedDate : ?Int, areaManagerId : Nat) : async DonorDto {
+    // Find the AM ID for this caller
+    var callerAmId : ?Nat = null;
+    for ((amId, principal) in amPrincipals.entries()) {
+      if (principal == caller) {
+        callerAmId := ?amId;
+      };
+    };
+
+    switch (callerAmId) {
+      case (null) {
+        Runtime.trap("Unauthorized: Only Area Managers can add donors");
+      };
+      case (?amId) {
+        switch (areaManagers.get(amId)) {
+          case (null) {
+            Runtime.trap("Area Manager not found");
+          };
+          case (?am) {
+            if (am.status != #approved) {
+              Runtime.trap("Unauthorized: Only approved Area Managers can add donors");
+            };
+            if (am.areaId != areaId) {
+              Runtime.trap("Unauthorized: Can only add donors in your own area");
+            };
+
+            let id = donorIdCounter;
+            let status = #available;
+            let donor : DonorDto = {
+              id;
+              name;
+              contact;
+              bloodGroup;
+              districtId;
+              areaId;
+              age;
+              lastDonatedDate;
+              status;
+              rejectedAt = null;
+              appointedAt = null;
+              patientName = null;
+              areaManagerId;
+            };
+            donors.add(id, donor);
+            donorIdCounter += 1;
+            donor;
+          };
+        };
+      };
+    };
+  };
+
+  public query ({ caller }) func getDonorsByArea(areaId : Nat) : async [DonorDto] {
+    // Find the AM ID for this caller
+    var callerAmId : ?Nat = null;
+    for ((amId, principal) in amPrincipals.entries()) {
+      if (principal == caller) {
+        callerAmId := ?amId;
+      };
+    };
+
+    switch (callerAmId) {
+      case (null) {
+        Runtime.trap("Unauthorized: Only Area Managers can view donors");
+      };
+      case (?amId) {
+        switch (areaManagers.get(amId)) {
+          case (null) {
+            Runtime.trap("Area Manager not found");
+          };
+          case (?am) {
+            if (am.areaId != areaId) {
+              Runtime.trap("Unauthorized: Can only view donors in your own area");
+            };
+            donors.values().toArray().filter(func(donor) { donor.areaId == areaId }).sort();
+          };
+        };
+      };
+    };
+  };
+
+  public shared ({ caller }) func updateDonorStatus(donorId : Nat, status : DonorStatus, rejectedAt : ?Int, appointedAt : ?Int, patientName : ?Text) : async DonorDto {
+    // Find the AM ID for this caller
+    var callerAmId : ?Nat = null;
+    for ((amId, principal) in amPrincipals.entries()) {
+      if (principal == caller) {
+        callerAmId := ?amId;
+      };
+    };
+
+    switch (callerAmId) {
+      case (null) {
+        Runtime.trap("Unauthorized: Only Area Managers can update donor status");
+      };
+      case (?amId) {
+        switch (areaManagers.get(amId)) {
+          case (null) {
+            Runtime.trap("Area Manager not found");
+          };
+          case (?am) {
+            if (am.status != #approved) {
+              Runtime.trap("Unauthorized: Only approved Area Managers can update donors");
+            };
+
+            switch (donors.get(donorId)) {
+              case (null) { Runtime.trap("Donor not found") };
+              case (?donor) {
+                if (donor.areaId != am.areaId) {
+                  Runtime.trap("Unauthorized: Can only update donors in your own area");
+                };
+
+                let updatedDonor = {
+                  donor with
+                  status;
+                  rejectedAt;
+                  appointedAt;
+                  patientName;
+                };
+                donors.add(donorId, updatedDonor);
+                updatedDonor;
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  public shared ({ caller }) func restoreDonor(donorId : Nat) : async DonorDto {
+    // Find the AM ID for this caller
+    var callerAmId : ?Nat = null;
+    for ((amId, principal) in amPrincipals.entries()) {
+      if (principal == caller) {
+        callerAmId := ?amId;
+      };
+    };
+
+    switch (callerAmId) {
+      case (null) {
+        Runtime.trap("Unauthorized: Only Area Managers can restore donors");
+      };
+      case (?amId) {
+        switch (areaManagers.get(amId)) {
+          case (null) {
+            Runtime.trap("Area Manager not found");
+          };
+          case (?am) {
+            if (am.status != #approved) {
+              Runtime.trap("Unauthorized: Only approved Area Managers can restore donors");
+            };
+
+            switch (donors.get(donorId)) {
+              case (null) { Runtime.trap("Donor not found") };
+              case (?donor) {
+                if (donor.areaId != am.areaId) {
+                  Runtime.trap("Unauthorized: Can only restore donors in your own area");
+                };
+
+                let updatedDonor = {
+                  donor with
+                  status = #available;
+                  rejectedAt = null;
+                };
+                donors.add(donorId, updatedDonor);
+                updatedDonor;
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  public shared ({ caller }) func deleteDonor(donorId : Nat) : async () {
+    // Find the AM ID for this caller
+    var callerAmId : ?Nat = null;
+    for ((amId, principal) in amPrincipals.entries()) {
+      if (principal == caller) {
+        callerAmId := ?amId;
+      };
+    };
+
+    switch (callerAmId) {
+      case (null) {
+        Runtime.trap("Unauthorized: Only Area Managers can delete donors");
+      };
+      case (?amId) {
+        switch (areaManagers.get(amId)) {
+          case (null) {
+            Runtime.trap("Area Manager not found");
+          };
+          case (?am) {
+            if (am.status != #approved) {
+              Runtime.trap("Unauthorized: Only approved Area Managers can delete donors");
+            };
+
+            switch (donors.get(donorId)) {
+              case (null) { Runtime.trap("Donor not found") };
+              case (?donor) {
+                if (donor.areaId != am.areaId) {
+                  Runtime.trap("Unauthorized: Can only delete donors in your own area");
+                };
+                donors.remove(donorId);
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  // -------------------------------------------------- BLOOD REQUESTS -------------------------------------------------- //
+  let bloodRequests = Map.empty<Nat, BloodRequestDto>();
+  var bloodRequestIdCounter = 0;
+
+  public shared ({ caller }) func createBloodRequest(
+    fromRole : Text,
+    fromId : Nat,
+    toRole : Text,
+    toId : Nat,
+    patientName : Text,
+    age : Nat,
+    bloodGroup : Text,
+    hospitalName : Text,
+    hospitalAddress : Text,
+    attenderName : Text,
+    contact : Text,
+    altContact : ?Text,
+    operationDate : Text
+  ) : async BloodRequestDto {
+    // Verify caller is authorized based on fromRole
+    if (fromRole == "User") {
+      var callerUserId : ?Nat = null;
+      for ((userId, principal) in userPrincipals.entries()) {
+        if (principal == caller) {
+          callerUserId := ?userId;
+        };
+      };
+      switch (callerUserId) {
+        case (null) {
+          Runtime.trap("Unauthorized: User not found");
+        };
+        case (?userId) {
+          if (userId != fromId) {
+            Runtime.trap("Unauthorized: Can only create requests as yourself");
+          };
+        };
+      };
+    } else if (fromRole == "AM") {
+      var callerAmId : ?Nat = null;
+      for ((amId, principal) in amPrincipals.entries()) {
+        if (principal == caller) {
+          callerAmId := ?amId;
+        };
+      };
+      switch (callerAmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: Area Manager not found");
+        };
+        case (?amId) {
+          if (amId != fromId) {
+            Runtime.trap("Unauthorized: Can only create requests as yourself");
+          };
+        };
+      };
+    } else if (fromRole == "DM") {
+      var callerDmId : ?Nat = null;
+      for ((dmId, principal) in dmPrincipals.entries()) {
+        if (principal == caller) {
+          callerDmId := ?dmId;
+        };
+      };
+      switch (callerDmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: District Manager not found");
+        };
+        case (?dmId) {
+          if (dmId != fromId) {
+            Runtime.trap("Unauthorized: Can only create requests as yourself");
+          };
+        };
+      };
+    } else {
+      Runtime.trap("Invalid fromRole");
+    };
+
+    let id = bloodRequestIdCounter;
+    let request : BloodRequestDto = {
+      id;
+      fromRole;
+      fromId;
+      toRole;
+      toId;
+      patientName;
+      age;
+      bloodGroup;
+      hospitalName;
+      hospitalAddress;
+      attenderName;
+      contact;
+      altContact;
+      operationDate;
+      status = #pending;
+      createdAt = Time.now();
+    };
+    bloodRequests.add(id, request);
+    bloodRequestIdCounter += 1;
+    request;
+  };
+
+  public shared ({ caller }) func forwardBloodRequest(requestId : Nat, toRole : Text, toId : Nat) : async BloodRequestDto {
+    switch (bloodRequests.get(requestId)) {
+      case (null) { Runtime.trap("Blood request not found") };
+      case (?request) {
+        // Verify caller is the current recipient
+        if (request.toRole == "DM") {
+          var callerDmId : ?Nat = null;
+          for ((dmId, principal) in dmPrincipals.entries()) {
+            if (principal == caller) {
+              callerDmId := ?dmId;
+            };
+          };
+          switch (callerDmId) {
+            case (null) {
+              Runtime.trap("Unauthorized: Only the recipient DM can forward this request");
+            };
+            case (?dmId) {
+              if (dmId != request.toId) {
+                Runtime.trap("Unauthorized: Only the recipient DM can forward this request");
+              };
+            };
+          };
+        } else if (request.toRole == "AM") {
+          var callerAmId : ?Nat = null;
+          for ((amId, principal) in amPrincipals.entries()) {
+            if (principal == caller) {
+              callerAmId := ?amId;
+            };
+          };
+          switch (callerAmId) {
+            case (null) {
+              Runtime.trap("Unauthorized: Only the recipient AM can forward this request");
+            };
+            case (?amId) {
+              if (amId != request.toId) {
+                Runtime.trap("Unauthorized: Only the recipient AM can forward this request");
+              };
+            };
+          };
+        } else {
+          Runtime.trap("Unauthorized: Invalid recipient role");
+        };
+
+        let updatedRequest = {
+          request with
+          toRole;
+          toId;
+          status = #forwarded;
+        };
+        bloodRequests.add(requestId, updatedRequest);
+        updatedRequest;
+      };
+    };
+  };
+
+  public shared ({ caller }) func completeBloodRequest(requestId : Nat) : async BloodRequestDto {
+    switch (bloodRequests.get(requestId)) {
+      case (null) { Runtime.trap("Blood request not found") };
+      case (?request) {
+        // Verify caller is the current recipient
+        if (request.toRole == "DM") {
+          var callerDmId : ?Nat = null;
+          for ((dmId, principal) in dmPrincipals.entries()) {
+            if (principal == caller) {
+              callerDmId := ?dmId;
+            };
+          };
+          switch (callerDmId) {
+            case (null) {
+              Runtime.trap("Unauthorized: Only the recipient DM can complete this request");
+            };
+            case (?dmId) {
+              if (dmId != request.toId) {
+                Runtime.trap("Unauthorized: Only the recipient DM can complete this request");
+              };
+            };
+          };
+        } else if (request.toRole == "AM") {
+          var callerAmId : ?Nat = null;
+          for ((amId, principal) in amPrincipals.entries()) {
+            if (principal == caller) {
+              callerAmId := ?amId;
+            };
+          };
+          switch (callerAmId) {
+            case (null) {
+              Runtime.trap("Unauthorized: Only the recipient AM can complete this request");
+            };
+            case (?amId) {
+              if (amId != request.toId) {
+                Runtime.trap("Unauthorized: Only the recipient AM can complete this request");
+              };
+            };
+          };
+        } else {
+          Runtime.trap("Unauthorized: Invalid recipient role");
+        };
+
+        let updatedRequest = {
+          request with
+          status = #completed;
+        };
+        bloodRequests.add(requestId, updatedRequest);
+        updatedRequest;
+      };
+    };
+  };
+
+  public query ({ caller }) func getBloodRequestsForRecipient(toRole : Text, toId : Nat) : async [BloodRequestDto] {
+    // Verify caller is the recipient
+    if (toRole == "DM") {
+      var callerDmId : ?Nat = null;
+      for ((dmId, principal) in dmPrincipals.entries()) {
+        if (principal == caller) {
+          callerDmId := ?dmId;
+        };
+      };
+      switch (callerDmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: District Manager not found");
+        };
+        case (?dmId) {
+          if (dmId != toId) {
+            Runtime.trap("Unauthorized: Can only view your own requests");
+          };
+        };
+      };
+    } else if (toRole == "AM") {
+      var callerAmId : ?Nat = null;
+      for ((amId, principal) in amPrincipals.entries()) {
+        if (principal == caller) {
+          callerAmId := ?amId;
+        };
+      };
+      switch (callerAmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: Area Manager not found");
+        };
+        case (?amId) {
+          if (amId != toId) {
+            Runtime.trap("Unauthorized: Can only view your own requests");
+          };
+        };
+      };
+    } else {
+      Runtime.trap("Invalid recipient role");
+    };
+
+    bloodRequests.values().toArray().filter(func(req) {
+      req.toRole == toRole and req.toId == toId
+    });
+  };
+
+  // -------------------------------------------------- NOTICES -------------------------------------------------- //
+  let notices = Map.empty<Nat, NoticeDto>();
+  var noticeIdCounter = 0;
+
+  // CEO uses frontend-only auth; no ICP-level permission check for CEO/Admin role
+  public shared ({ caller }) func sendNotice(fromRole : Text, fromId : Nat, toRole : Text, toId : ?Nat, message : Text) : async NoticeDto {
+    // Only verify caller for DM and AM roles; CEO auth is handled at frontend
+    if (fromRole == "DM") {
+      var callerDmId : ?Nat = null;
+      for ((dmId, principal) in dmPrincipals.entries()) {
+        if (principal == caller) {
+          callerDmId := ?dmId;
+        };
+      };
+      switch (callerDmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: District Manager not found");
+        };
+        case (?dmId) {
+          if (dmId != fromId) {
+            Runtime.trap("Unauthorized: Can only send notices as yourself");
+          };
+        };
+      };
+    } else if (fromRole == "AM") {
+      var callerAmId : ?Nat = null;
+      for ((amId, principal) in amPrincipals.entries()) {
+        if (principal == caller) {
+          callerAmId := ?amId;
+        };
+      };
+      switch (callerAmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: Area Manager not found");
+        };
+        case (?amId) {
+          if (amId != fromId) {
+            Runtime.trap("Unauthorized: Can only send notices as yourself");
+          };
+        };
+      };
+    };
+    // CEO/Admin fromRole: no ICP-level check, frontend handles auth
+
+    let id = noticeIdCounter;
+    let notice : NoticeDto = {
+      id;
+      fromRole;
+      fromId;
+      toRole;
+      toId;
+      message;
+      createdAt = Time.now();
+    };
+    notices.add(id, notice);
+    noticeIdCounter += 1;
+    notice;
+  };
+
+  public query ({ caller }) func getNoticesForRecipient(role : Text, id : Nat) : async [NoticeDto] {
+    // Verify caller is the recipient
+    if (role == "DM") {
+      var callerDmId : ?Nat = null;
+      for ((dmId, principal) in dmPrincipals.entries()) {
+        if (principal == caller) {
+          callerDmId := ?dmId;
+        };
+      };
+      switch (callerDmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: District Manager not found");
+        };
+        case (?dmId) {
+          if (dmId != id) {
+            Runtime.trap("Unauthorized: Can only view your own notices");
+          };
+        };
+      };
+    } else if (role == "AM") {
+      var callerAmId : ?Nat = null;
+      for ((amId, principal) in amPrincipals.entries()) {
+        if (principal == caller) {
+          callerAmId := ?amId;
+        };
+      };
+      switch (callerAmId) {
+        case (null) {
+          Runtime.trap("Unauthorized: Area Manager not found");
+        };
+        case (?amId) {
+          if (amId != id) {
+            Runtime.trap("Unauthorized: Can only view your own notices");
+          };
+        };
+      };
+    } else if (role == "User") {
+      var callerUserId : ?Nat = null;
+      for ((userId, principal) in userPrincipals.entries()) {
+        if (principal == caller) {
+          callerUserId := ?userId;
+        };
+      };
+      switch (callerUserId) {
+        case (null) {
+          Runtime.trap("Unauthorized: User not found");
+        };
+        case (?userId) {
+          if (userId != id) {
+            Runtime.trap("Unauthorized: Can only view your own notices");
+          };
+        };
+      };
+    } else {
+      Runtime.trap("Invalid role");
+    };
+
+    notices.values().toArray().filter(func(notice) {
+      notice.toRole == role and (switch (notice.toId) {
+        case (null) { true };
+        case (?toId) { toId == id };
+      })
+    });
+  };
+};
