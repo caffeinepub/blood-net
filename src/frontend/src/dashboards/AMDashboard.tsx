@@ -17,6 +17,8 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { BloodRequestStatus, DonorStatus } from "../backend";
 import type {
+  AreaDto,
+  AreaManagerDto,
   BloodRequestDto,
   DistrictDto,
   DistrictManagerDto,
@@ -214,6 +216,8 @@ export default function AMDashboard() {
   const [donors, setDonors] = useState<DonorDto[]>([]);
   const [dms, setDms] = useState<DistrictManagerDto[]>([]);
   const [districts, setDistricts] = useState<DistrictDto[]>([]);
+  const [areaManagers, setAreaManagers] = useState<AreaManagerDto[]>([]);
+  const [areas, setAreas] = useState<AreaDto[]>([]);
   const [receivedRequests, setReceivedRequests] = useState<BloodRequestDto[]>(
     [],
   );
@@ -242,13 +246,20 @@ export default function AMDashboard() {
     if (!actor || areaId === undefined) return;
     setLoading(true);
     try {
-      const [donorList, dmList, districtList] = await Promise.all([
-        actor.getDonorsByArea(areaId),
-        districtId
-          ? actor.getApprovedDistrictManagers()
-          : Promise.resolve([] as DistrictManagerDto[]),
-        actor.getDistricts(),
-      ]);
+      const [donorList, dmList, districtList, amList, areaList] =
+        await Promise.all([
+          actor.getDonorsByArea(areaId),
+          districtId !== undefined
+            ? actor.getApprovedDistrictManagers()
+            : Promise.resolve([] as DistrictManagerDto[]),
+          actor.getDistricts(),
+          districtId !== undefined
+            ? actor.getApprovedAreaManagersByDistrict(districtId)
+            : Promise.resolve([] as AreaManagerDto[]),
+          districtId !== undefined
+            ? actor.getAreasByDistrict(districtId)
+            : Promise.resolve([] as AreaDto[]),
+        ]);
 
       // Auto-restore temp-rejected donors past their available-after date
       const now = Date.now();
@@ -267,6 +278,8 @@ export default function AMDashboard() {
       }
       setDms(dmList);
       setDistricts(districtList);
+      setAreaManagers(amList);
+      setAreas(areaList);
     } catch (err) {
       toast.error(`Failed to load data: ${err}`);
     } finally {
@@ -443,8 +456,32 @@ export default function AMDashboard() {
   const getDistrictName = (dId: bigint) =>
     districts.find((d) => d.id === dId)?.name ?? "Unknown District";
 
-  const getDmUsername = (fromId: bigint) =>
-    dms.find((dm) => dm.id === fromId)?.username ?? null;
+  const getSenderInfo = (
+    fromRole: string,
+    fromId: bigint,
+  ): { name: string; subtitle: string; roleLabel: string } => {
+    if (fromRole === "dm") {
+      const dm = dms.find((d) => d.id === fromId);
+      const distName = dm ? getDistrictName(dm.districtId) : "Unknown District";
+      return {
+        name: dm?.username ?? "Unknown Manager",
+        subtitle: distName,
+        roleLabel: "District Manager",
+      };
+    }
+    if (fromRole === "am") {
+      const am = areaManagers.find((a) => a.id === fromId);
+      const area = am ? areas.find((ar) => ar.id === am.areaId) : undefined;
+      const distName = am ? getDistrictName(am.districtId) : "Unknown District";
+      const areaName = area?.name ?? "Unknown Area";
+      return {
+        name: am?.username ?? "Unknown Manager",
+        subtitle: `${areaName}, ${distName}`,
+        roleLabel: "Area Manager",
+      };
+    }
+    return { name: "Unknown", subtitle: "", roleLabel: fromRole };
+  };
 
   const getStatusColor = (status: BloodRequestStatus) => {
     switch (status) {
@@ -906,13 +943,14 @@ export default function AMDashboard() {
                 No blood requests received yet
               </p>
               <p className="text-xs text-muted-foreground">
-                Requests forwarded by District Managers will appear here.
+                Requests forwarded by District Managers or Area Managers will
+                appear here.
               </p>
             </div>
           ) : (
             <div className="space-y-3">
               {receivedRequests.map((req, i) => {
-                const dmUsername = getDmUsername(req.fromId);
+                const sender = getSenderInfo(req.fromRole, req.fromId);
                 return (
                   <div
                     key={req.id.toString()}
@@ -939,6 +977,34 @@ export default function AMDashboard() {
                         </p>
                       </div>
                       <BloodGroupChip group={req.bloodGroup} />
+                    </div>
+
+                    {/* Received From */}
+                    <div className="flex items-center gap-2 mb-3 p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-0.5">
+                          Received From
+                        </p>
+                        <p className="text-sm font-semibold text-foreground truncate">
+                          {sender.name}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <span
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                              req.fromRole === "dm"
+                                ? "bg-purple-100 text-purple-700"
+                                : "bg-teal-100 text-teal-700"
+                            }`}
+                          >
+                            {sender.roleLabel}
+                          </span>
+                          {sender.subtitle && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {sender.subtitle}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Hospital info */}
@@ -999,13 +1065,8 @@ export default function AMDashboard() {
                       )}
                     </div>
 
-                    {/* Footer: DM source + created at */}
-                    <div className="pt-2 border-t border-border flex items-center justify-between flex-wrap gap-1">
-                      <span className="text-xs text-muted-foreground">
-                        {dmUsername
-                          ? `District Manager: ${dmUsername}`
-                          : `From DM ID: ${req.fromId.toString()}`}
-                      </span>
+                    {/* Footer: created at */}
+                    <div className="pt-2 border-t border-border flex items-center justify-end">
                       <span className="text-xs text-muted-foreground">
                         {new Date(
                           Number(req.createdAt) / 1_000_000,
