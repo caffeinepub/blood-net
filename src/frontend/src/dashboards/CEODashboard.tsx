@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Loader2,
   MapPin,
+  MessageCircle,
   Plus,
   User,
   Users,
@@ -18,12 +19,21 @@ import type {
   DistrictDto,
   DistrictManagerDto,
 } from "../backend";
+import { ChatSection, useCEOChatContacts } from "../components/ChatSection";
+import { FeedbackSection } from "../components/FeedbackSection";
 import { triggerTabChange } from "../components/NavBar";
 import { StatusBadge } from "../components/StatusBadge";
 import { getCeoProfile, saveCeoProfile, useAuth } from "../context/AuthContext";
 import { useActor } from "../hooks/useActor";
 
-type Tab = "districts" | "approvals" | "managers" | "notices" | "profile";
+type Tab =
+  | "districts"
+  | "approvals"
+  | "managers"
+  | "notices"
+  | "feedback"
+  | "chat"
+  | "profile";
 
 function KPICard({
   label,
@@ -214,6 +224,8 @@ export default function CEODashboard() {
   });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
 
+  const { contacts: chatContacts, loading: chatLoading } = useCEOChatContacts();
+
   const loadData = useCallback(async () => {
     if (!actor) return;
     const [dList, pendList, appList] = await Promise.all([
@@ -320,13 +332,31 @@ export default function CEODashboard() {
   const districtMap: Record<string, string> = {};
   for (const d of districts) districtMap[d.id.toString()] = d.name;
 
+  const ALL_TABS: Tab[] = [
+    "districts",
+    "approvals",
+    "managers",
+    "notices",
+    "feedback",
+    "chat",
+    "profile",
+  ];
+
+  const TAB_LABELS: Record<Tab, string> = {
+    districts: "Districts",
+    approvals: "Approvals",
+    managers: "Managers",
+    notices: "Notices",
+    feedback: "Feedback",
+    chat: "Chat",
+    profile: "Profile",
+  };
+
   return (
     <div className="animate-slide-in-up">
       {/* Tab indicator */}
-      <div className="hidden md:flex gap-2 mb-6">
-        {(
-          ["districts", "approvals", "managers", "notices", "profile"] as Tab[]
-        ).map((t) => (
+      <div className="hidden md:flex gap-2 mb-6 flex-wrap">
+        {ALL_TABS.map((t) => (
           <button
             type="button"
             key={t}
@@ -338,7 +368,7 @@ export default function CEODashboard() {
             }`}
             data-ocid={`ceo.${t}.tab`}
           >
-            {t}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -584,6 +614,19 @@ export default function CEODashboard() {
               )}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Feedback Tab */}
+      {activeTab === "feedback" && <FeedbackSection userRole="ceo" />}
+
+      {/* Chat Tab */}
+      {activeTab === "chat" && (
+        <div data-ocid="ceo.chat.section">
+          <h2 className="font-bold mb-4 flex items-center gap-2">
+            <MessageCircle size={18} className="text-destructive" /> Messages
+          </h2>
+          <ChatSection contacts={chatContacts} loadingContacts={chatLoading} />
         </div>
       )}
 

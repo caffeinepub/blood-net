@@ -1,9 +1,16 @@
 import { Heart, Loader2, Send, User } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { DistrictDto, DistrictManagerDto } from "../backend";
+import type {
+  AreaDto,
+  AreaManagerDto,
+  DistrictDto,
+  DistrictManagerDto,
+} from "../backend";
 import { BloodRequestForm } from "../components/BloodRequestForm";
+import { ChatSection, useUserChatContacts } from "../components/ChatSection";
 import { DonorForm } from "../components/DonorForm";
+import { FeedbackSection } from "../components/FeedbackSection";
 import {
   getStoredCreds,
   saveStoredCred,
@@ -11,7 +18,8 @@ import {
 } from "../context/AuthContext";
 import { useActor } from "../hooks/useActor";
 
-type Tab = "become-donor" | "request" | "profile";
+type Tab = "become-donor" | "request" | "feedback" | "chat" | "profile";
+type SendTarget = "dm" | "am";
 
 export default function UserDashboard() {
   const { session, login } = useAuth();
@@ -19,7 +27,17 @@ export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("become-donor");
   const [dms, setDms] = useState<DistrictManagerDto[]>([]);
   const [districts, setDistricts] = useState<DistrictDto[]>([]);
+
+  // Send to DM state
   const [dmForRequest, setDmForRequest] = useState("");
+  // Send to AM state
+  const [sendTarget, setSendTarget] = useState<SendTarget>("dm");
+  const [selectedDistrictForAM, setSelectedDistrictForAM] = useState("");
+  const [selectedAMId, setSelectedAMId] = useState("");
+  const [amsForDistrict, setAmsForDistrict] = useState<AreaManagerDto[]>([]);
+  const [areasForDistrict, setAreasForDistrict] = useState<AreaDto[]>([]);
+  const [loadingAMs, setLoadingAMs] = useState(false);
+
   const [showRequestForm, setShowRequestForm] = useState(false);
   const [donorSubmitted, setDonorSubmitted] = useState(false);
   const [editProfile, setEditProfile] = useState({
@@ -31,6 +49,9 @@ export default function UserDashboard() {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
 
   const userId = session?.id;
+
+  const { contacts: chatContacts, loading: chatLoading } =
+    useUserChatContacts(userId);
 
   const loadData = useCallback(async () => {
     if (!actor) return;
@@ -55,8 +76,34 @@ export default function UserDashboard() {
     return () => window.removeEventListener("bloodnet-tab-change", handler);
   }, []);
 
+  // Load AMs for selected district
+  useEffect(() => {
+    if (!actor || !selectedDistrictForAM) {
+      setAmsForDistrict([]);
+      setAreasForDistrict([]);
+      setSelectedAMId("");
+      return;
+    }
+    const distId = BigInt(selectedDistrictForAM);
+    setLoadingAMs(true);
+    Promise.all([
+      actor.getApprovedAreaManagersByDistrict(distId),
+      actor.getAreasByDistrict(distId),
+    ])
+      .then(([ams, areas]) => {
+        setAmsForDistrict(ams);
+        setAreasForDistrict(areas);
+        setSelectedAMId("");
+      })
+      .catch(() => {})
+      .finally(() => setLoadingAMs(false));
+  }, [actor, selectedDistrictForAM]);
+
   const getDistrictName = (districtId: bigint) =>
     districts.find((d) => d.id === districtId)?.name ?? "Unknown District";
+
+  const getAreaName = (areaId: bigint) =>
+    areasForDistrict.find((a) => a.id === areaId)?.name ?? "Area";
 
   const handleSaveProfile = () => {
     if (editProfile.password !== editProfile.confirmPassword) {
@@ -82,22 +129,39 @@ export default function UserDashboard() {
     setIsSavingProfile(false);
   };
 
+  const TAB_LABELS: Record<Tab, string> = {
+    "become-donor": "Become Donor",
+    request: "Send Request",
+    feedback: "Feedback",
+    chat: "Chat",
+    profile: "Profile",
+  };
+
+  const toRole = sendTarget === "dm" ? "dm" : "am";
+  const toId =
+    sendTarget === "dm"
+      ? BigInt(dmForRequest || "0")
+      : BigInt(selectedAMId || "0");
+  const canContinue = sendTarget === "dm" ? !!dmForRequest : !!selectedAMId;
+
   return (
     <div className="animate-slide-in-up">
-      <div className="hidden md:flex gap-2 mb-6">
-        {(["become-donor", "request", "profile"] as Tab[]).map((t) => (
+      <div className="hidden md:flex gap-2 mb-6 flex-wrap">
+        {(
+          ["become-donor", "request", "feedback", "chat", "profile"] as Tab[]
+        ).map((t) => (
           <button
             type="button"
             key={t}
             onClick={() => setActiveTab(t)}
-            className={`px-4 py-2 rounded-full text-sm font-semibold capitalize transition-all ${
+            className={`px-4 py-2 rounded-full text-sm font-semibold transition-all ${
               activeTab === t
                 ? "bg-primary text-primary-foreground"
                 : "bg-white border border-border text-muted-foreground hover:bg-secondary"
             }`}
             data-ocid={`user.${t}.tab`}
           >
-            {t.replace("-", " ")}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -111,7 +175,7 @@ export default function UserDashboard() {
                 <Heart size={28} className="text-destructive" />
               </div>
               <h2 className="text-xl font-bold text-foreground mb-2">
-                You're a Donor!
+                You&apos;re a Donor!
               </h2>
               <p className="text-muted-foreground text-sm">
                 Thank you for registering as a blood donor. Your information has
@@ -142,55 +206,186 @@ export default function UserDashboard() {
           <h2 className="font-bold mb-4 flex items-center gap-2">
             <Send size={18} className="text-destructive" /> Send Blood Request
           </h2>
+
           {!showRequestForm ? (
-            <>
-              <div className="mb-3">
-                <label
-                  htmlFor="u-dm-sel"
-                  className="block text-sm font-medium mb-1"
-                >
-                  Select District Manager
-                </label>
-                <select
-                  id="u-dm-sel"
-                  className="form-input"
-                  value={dmForRequest}
-                  onChange={(e) => setDmForRequest(e.target.value)}
-                  data-ocid="user.request.select"
-                >
-                  <option value="">Select DM</option>
-                  {dms.map((dm) => (
-                    <option key={dm.id.toString()} value={dm.id.toString()}>
-                      {getDistrictName(dm.districtId)} - {dm.username}
-                    </option>
-                  ))}
-                </select>
+            <div className="space-y-4">
+              {/* Target type toggle */}
+              <div>
+                <p className="block text-sm font-medium mb-2">Send To</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSendTarget("dm");
+                      setSelectedDistrictForAM("");
+                      setSelectedAMId("");
+                    }}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                      sendTarget === "dm"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-white border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                    data-ocid="user.request.dm.toggle"
+                  >
+                    District Manager
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSendTarget("am");
+                      setDmForRequest("");
+                    }}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                      sendTarget === "am"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-white border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                    data-ocid="user.request.am.toggle"
+                  >
+                    Area Manager
+                  </button>
+                </div>
               </div>
+
+              {/* DM selection */}
+              {sendTarget === "dm" && (
+                <div>
+                  <label
+                    htmlFor="u-dm-sel"
+                    className="block text-sm font-medium mb-1"
+                  >
+                    Select District Manager
+                  </label>
+                  <select
+                    id="u-dm-sel"
+                    className="form-input"
+                    value={dmForRequest}
+                    onChange={(e) => setDmForRequest(e.target.value)}
+                    data-ocid="user.request.select"
+                  >
+                    <option value="">Select DM</option>
+                    {dms.map((dm) => (
+                      <option key={dm.id.toString()} value={dm.id.toString()}>
+                        {getDistrictName(dm.districtId)} - {dm.username}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* AM selection: district first, then AM */}
+              {sendTarget === "am" && (
+                <div className="space-y-3">
+                  <div>
+                    <label
+                      htmlFor="u-district-sel"
+                      className="block text-sm font-medium mb-1"
+                    >
+                      Select District
+                    </label>
+                    <select
+                      id="u-district-sel"
+                      className="form-input"
+                      value={selectedDistrictForAM}
+                      onChange={(e) => setSelectedDistrictForAM(e.target.value)}
+                      data-ocid="user.request.district.select"
+                    >
+                      <option value="">Select district</option>
+                      {districts.map((d) => (
+                        <option key={d.id.toString()} value={d.id.toString()}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedDistrictForAM && (
+                    <div>
+                      <label
+                        htmlFor="u-am-sel"
+                        className="block text-sm font-medium mb-1"
+                      >
+                        Select Area Manager
+                      </label>
+                      {loadingAMs ? (
+                        <div
+                          className="flex items-center gap-2 py-3 text-sm text-muted-foreground"
+                          data-ocid="user.request.am.loading_state"
+                        >
+                          <Loader2 className="w-4 h-4 animate-spin" /> Loading
+                          area managers...
+                        </div>
+                      ) : amsForDistrict.length === 0 ? (
+                        <p
+                          className="text-sm text-muted-foreground py-2"
+                          data-ocid="user.request.am.empty_state"
+                        >
+                          No area managers in this district yet.
+                        </p>
+                      ) : (
+                        <select
+                          id="u-am-sel"
+                          className="form-input"
+                          value={selectedAMId}
+                          onChange={(e) => setSelectedAMId(e.target.value)}
+                          data-ocid="user.request.am.select"
+                        >
+                          <option value="">Select area manager</option>
+                          {amsForDistrict.map((am) => (
+                            <option
+                              key={am.id.toString()}
+                              value={am.id.toString()}
+                            >
+                              {am.username} — {getAreaName(am.areaId)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button
                 type="button"
                 className="btn-danger w-full"
                 onClick={() => setShowRequestForm(true)}
-                disabled={!dmForRequest}
+                disabled={!canContinue}
                 data-ocid="user.request.primary_button"
               >
                 <span className="flex items-center justify-center gap-2">
                   <Send size={16} /> Continue
                 </span>
               </button>
-            </>
+            </div>
           ) : (
             <BloodRequestForm
               fromRole="user"
               fromId={userId ?? 0n}
-              toRole="dm"
-              toId={BigInt(dmForRequest || "0")}
+              toRole={toRole}
+              toId={toId}
               onSuccess={() => {
                 setShowRequestForm(false);
                 setDmForRequest("");
+                setSelectedAMId("");
+                setSelectedDistrictForAM("");
               }}
               onCancel={() => setShowRequestForm(false)}
             />
           )}
+        </div>
+      )}
+
+      {/* Feedback Tab */}
+      {activeTab === "feedback" && <FeedbackSection userRole="user" />}
+
+      {/* Chat Tab */}
+      {activeTab === "chat" && (
+        <div data-ocid="user.chat.section">
+          <h2 className="font-bold mb-4 flex items-center gap-2">
+            <Send size={18} className="text-destructive" /> Messages
+          </h2>
+          <ChatSection contacts={chatContacts} loadingContacts={chatLoading} />
         </div>
       )}
 

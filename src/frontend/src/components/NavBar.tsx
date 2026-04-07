@@ -2,9 +2,11 @@ import {
   BarChart2,
   Bell,
   CheckSquare,
+  Flag,
   Heart,
   LogOut,
   MapPin,
+  MessageCircle,
   PlusCircle,
   Send,
   User,
@@ -23,6 +25,8 @@ const CEO_TABS: NavItem[] = [
   { label: "Approvals", tab: "approvals", icon: <CheckSquare size={20} /> },
   { label: "Managers", tab: "managers", icon: <Users size={20} /> },
   { label: "Notices", tab: "notices", icon: <Bell size={20} /> },
+  { label: "Feedback", tab: "feedback", icon: <Flag size={20} /> },
+  { label: "Chat", tab: "chat", icon: <MessageCircle size={20} /> },
   { label: "Profile", tab: "profile", icon: <User size={20} /> },
 ];
 
@@ -32,6 +36,8 @@ const DM_TABS: NavItem[] = [
   { label: "Managers", tab: "managers", icon: <Users size={20} /> },
   { label: "Requests", tab: "requests", icon: <Send size={20} /> },
   { label: "Notices", tab: "notices", icon: <Bell size={20} /> },
+  { label: "Feedback", tab: "feedback", icon: <Flag size={20} /> },
+  { label: "Chat", tab: "chat", icon: <MessageCircle size={20} /> },
   { label: "Profile", tab: "profile", icon: <User size={20} /> },
 ];
 
@@ -40,12 +46,16 @@ const AM_TABS: NavItem[] = [
   { label: "Donors", tab: "donors", icon: <Heart size={20} /> },
   { label: "Add Donor", tab: "add-donor", icon: <PlusCircle size={20} /> },
   { label: "Requests", tab: "requests", icon: <Send size={20} /> },
+  { label: "Feedback", tab: "feedback", icon: <Flag size={20} /> },
+  { label: "Chat", tab: "chat", icon: <MessageCircle size={20} /> },
   { label: "Profile", tab: "profile", icon: <User size={20} /> },
 ];
 
 const USER_TABS: NavItem[] = [
   { label: "Become Donor", tab: "become-donor", icon: <Heart size={20} /> },
   { label: "Request", tab: "request", icon: <Send size={20} /> },
+  { label: "Feedback", tab: "feedback", icon: <Flag size={20} /> },
+  { label: "Chat", tab: "chat", icon: <MessageCircle size={20} /> },
   { label: "Profile", tab: "profile", icon: <User size={20} /> },
 ];
 

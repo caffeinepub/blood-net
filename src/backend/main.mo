@@ -75,9 +75,6 @@ actor {
   };
 
   // V1 donor shape: the original record stored in stable memory.
-  // Declaring `donors` with this type lets Motoko accept the upgrade
-  // (old data is compatible with this type). postupgrade then migrates
-  // to `donorsV2` which includes the new fields.
   type DonorDtoV1 = {
     id : Nat;
     name : Text;
@@ -166,6 +163,27 @@ actor {
     fromId : Nat;
     toRole : Text;
     toId : ?Nat;
+    message : Text;
+    createdAt : Int;
+  };
+
+  type MessageDto = {
+    id : Nat;
+    fromRole : Text;
+    fromId : Nat;
+    toRole : Text;
+    toId : Nat;
+    content : Text;
+    createdAt : Int;
+  };
+
+  type FeedbackDto = {
+    id : Nat;
+    fromRole : Text;
+    fromId : Nat;
+    toRole : Text;
+    toId : ?Nat;
+    itemType : Text;
     message : Text;
     createdAt : Int;
   };
@@ -481,6 +499,10 @@ actor {
     });
   };
 
+  public query func getAllApprovedAreaManagers() : async [AreaManagerDto] {
+    areaManagers.values().toArray().filter(func(am) { am.status == #approved });
+  };
+
   // -------------------------------------------------- USERS -------------------------------------------------- //
   let users = Map.empty<Nat, UserDto>();
   var userIdCounter = 0;
@@ -507,11 +529,11 @@ actor {
     };
   };
 
+  public query func getAllUsers() : async [UserDto] {
+    users.values().toArray();
+  };
+
   // -------------------------------------------------- DONORS -------------------------------------------------- //
-  // `donors` keeps the OLD DonorDtoV1 type so existing stable data loads
-  // without a compatibility error. All new donors are written to `donorsV2`.
-  // postupgrade copies V1 records (with null new fields) into donorsV2 once,
-  // then donorsV1Data is cleared so subsequent upgrades skip this step.
   let donors = Map.empty<Nat, DonorDtoV1>();
   let donorsV2 = Map.empty<Nat, DonorDto>();
   var donorIdCounter = 0;
@@ -720,6 +742,12 @@ actor {
     });
   };
 
+  public query func getBloodRequestsBySender(fromRole : Text, fromId : Nat) : async [BloodRequestDto] {
+    bloodRequests.values().toArray().filter(func(req) {
+      req.fromRole == fromRole and req.fromId == fromId
+    });
+  };
+
   // -------------------------------------------------- NOTICES -------------------------------------------------- //
   let notices = Map.empty<Nat, NoticeDto>();
   var noticeIdCounter = 0;
@@ -747,5 +775,74 @@ actor {
         case (?toId) { toId == id };
       })
     });
+  };
+
+  // -------------------------------------------------- MESSAGES -------------------------------------------------- //
+  let messages = Map.empty<Nat, MessageDto>();
+  var messageIdCounter = 0;
+
+  public shared func sendMessage(fromRole : Text, fromId : Nat, toRole : Text, toId : Nat, content : Text) : async MessageDto {
+    let id = messageIdCounter;
+    let msg : MessageDto = {
+      id;
+      fromRole;
+      fromId;
+      toRole;
+      toId;
+      content;
+      createdAt = Time.now();
+    };
+    messages.add(id, msg);
+    messageIdCounter += 1;
+    msg;
+  };
+
+  public query func getMessagesInThread(role1 : Text, id1 : Nat, role2 : Text, id2 : Nat) : async [MessageDto] {
+    messages.values().toArray().filter(func(m) {
+      (m.fromRole == role1 and m.fromId == id1 and m.toRole == role2 and m.toId == id2) or
+      (m.fromRole == role2 and m.fromId == id2 and m.toRole == role1 and m.toId == id1)
+    });
+  };
+
+  public query func getConversationsForUser(role : Text, id : Nat) : async [MessageDto] {
+    // Returns all messages involving this user (sent or received)
+    messages.values().toArray().filter(func(m) {
+      (m.fromRole == role and m.fromId == id) or
+      (m.toRole == role and m.toId == id)
+    });
+  };
+
+  // -------------------------------------------------- FEEDBACK & COMPLAINTS -------------------------------------------------- //
+  let feedbackItems = Map.empty<Nat, FeedbackDto>();
+  var feedbackIdCounter = 0;
+
+  public shared func submitFeedback(fromRole : Text, fromId : Nat, toRole : Text, toId : ?Nat, itemType : Text, message : Text) : async FeedbackDto {
+    let id = feedbackIdCounter;
+    let item : FeedbackDto = {
+      id;
+      fromRole;
+      fromId;
+      toRole;
+      toId;
+      itemType;
+      message;
+      createdAt = Time.now();
+    };
+    feedbackItems.add(id, item);
+    feedbackIdCounter += 1;
+    item;
+  };
+
+  public query func getFeedbackForDashboard(role : Text, id : Nat) : async [FeedbackDto] {
+    feedbackItems.values().toArray().filter(func(item) {
+      item.toRole == role and (switch (item.toId) {
+        case (null) { false };
+        case (?toId) { toId == id };
+      })
+    });
+  };
+
+  public query func getAllFeedback() : async [FeedbackDto] {
+    feedbackItems.values().toArray();
   };
 };

@@ -4,6 +4,7 @@ import {
   Heart,
   Inbox,
   Loader2,
+  MessageCircle,
   Phone,
   Plus,
   RotateCcw,
@@ -23,10 +24,13 @@ import type {
   DistrictDto,
   DistrictManagerDto,
   DonorDto,
+  UserDto,
 } from "../backend";
 import { BloodGroupChip } from "../components/BloodGroupChip";
 import { BloodRequestForm } from "../components/BloodRequestForm";
+import { ChatSection, useAMChatContacts } from "../components/ChatSection";
 import { DonorForm } from "../components/DonorForm";
+import { FeedbackSection } from "../components/FeedbackSection";
 import { StatusBadge } from "../components/StatusBadge";
 import {
   getStoredCreds,
@@ -41,8 +45,11 @@ type Tab =
   | "add-donor"
   | "requests"
   | "received-requests"
+  | "feedback"
+  | "chat"
   | "profile";
 type DonorSubTab = "available" | "appointed" | "tempRejected" | "permRejected";
+type SendTarget = "dm" | "am";
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -137,7 +144,6 @@ function TempRejectModal({
   const [availableAfter, setAvailableAfter] = useState("");
   const [reason, setReason] = useState("");
 
-  // Minimum date is tomorrow
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const minDate = tomorrow.toISOString().split("T")[0];
@@ -208,6 +214,101 @@ function TempRejectModal({
   );
 }
 
+function ForwardModal({
+  allDMs,
+  allAMs,
+  selfAmId,
+  onForward,
+  onClose,
+}: {
+  allDMs: DistrictManagerDto[];
+  allAMs: AreaManagerDto[];
+  selfAmId: bigint | undefined;
+  onForward: (toRole: string, toId: bigint) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 z-50 flex items-end md:items-center justify-center p-4"
+      onClick={onClose}
+      onKeyDown={(e) => e.key === "Escape" && onClose()}
+      data-ocid="forward.dialog"
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-sm shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h3 className="font-bold text-sm">Forward Request</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            data-ocid="forward.close_button"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-4 space-y-3 max-h-80 overflow-y-auto">
+          {allDMs.length > 0 && (
+            <>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                District Managers
+              </p>
+              {allDMs.map((dm) => (
+                <button
+                  type="button"
+                  key={dm.id.toString()}
+                  onClick={() => onForward("dm", dm.id)}
+                  className="w-full text-left p-3 rounded-xl bg-secondary hover:bg-blue-50 text-sm font-medium transition-colors"
+                  data-ocid="forward.confirm_button"
+                >
+                  <p className="font-semibold">{dm.username}</p>
+                  <p className="text-xs text-muted-foreground">
+                    District Manager
+                  </p>
+                </button>
+              ))}
+            </>
+          )}
+          {allAMs.filter((a) => a.id !== selfAmId).length > 0 && (
+            <>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-2">
+                Area Managers
+              </p>
+              {allAMs
+                .filter((a) => a.id !== selfAmId)
+                .map((am) => (
+                  <button
+                    type="button"
+                    key={am.id.toString()}
+                    onClick={() => onForward("am", am.id)}
+                    className="w-full text-left p-3 rounded-xl bg-secondary hover:bg-teal-50 text-sm font-medium transition-colors"
+                    data-ocid="forward.confirm_button"
+                  >
+                    <p className="font-semibold">{am.username}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Area Manager
+                    </p>
+                  </button>
+                ))}
+            </>
+          )}
+          {allDMs.length === 0 &&
+            allAMs.filter((a) => a.id !== selfAmId).length === 0 && (
+              <p
+                className="text-sm text-muted-foreground text-center py-4"
+                data-ocid="forward.empty_state"
+              >
+                No recipients available
+              </p>
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AMDashboard() {
   const { session, login } = useAuth();
   const { actor } = useActor();
@@ -217,10 +318,17 @@ export default function AMDashboard() {
   const [dms, setDms] = useState<DistrictManagerDto[]>([]);
   const [districts, setDistricts] = useState<DistrictDto[]>([]);
   const [areaManagers, setAreaManagers] = useState<AreaManagerDto[]>([]);
+  const [allAMs, setAllAMs] = useState<AreaManagerDto[]>([]);
   const [areas, setAreas] = useState<AreaDto[]>([]);
   const [receivedRequests, setReceivedRequests] = useState<BloodRequestDto[]>(
     [],
   );
+  const [senderCache, setSenderCache] = useState<
+    Record<
+      string,
+      { name: string; contact: string; subtitle: string; roleLabel: string }
+    >
+  >({});
   const [loadingReceivedRequests, setLoadingReceivedRequests] = useState(false);
   const [loading, setLoading] = useState(false);
   const [appointingDonor, setAppointingDonor] = useState<DonorDto | null>(null);
@@ -235,18 +343,31 @@ export default function AMDashboard() {
   });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [calledDonor, setCalledDonor] = useState<DonorDto | null>(null);
+
+  // Send request state
+  const [sendTarget, setSendTarget] = useState<SendTarget>("dm");
   const [dmForRequest, setDmForRequest] = useState("");
+  const [amForRequest, setAmForRequest] = useState("");
   const [showRequestForm, setShowRequestForm] = useState(false);
+
+  // Forward request
+  const [forwardingRequest, setForwardingRequest] =
+    useState<BloodRequestDto | null>(null);
 
   const areaId = session?.areaId;
   const districtId = session?.districtId;
   const amId = session?.id;
 
+  const { contacts: chatContacts, loading: chatLoading } = useAMChatContacts(
+    amId,
+    districtId,
+  );
+
   const loadData = useCallback(async () => {
     if (!actor || areaId === undefined) return;
     setLoading(true);
     try {
-      const [donorList, dmList, districtList, amList, areaList] =
+      const [donorList, dmList, districtList, amList, areaList, allAMList] =
         await Promise.all([
           actor.getDonorsByArea(areaId),
           districtId !== undefined
@@ -259,9 +380,21 @@ export default function AMDashboard() {
           districtId !== undefined
             ? actor.getAreasByDistrict(districtId)
             : Promise.resolve([] as AreaDto[]),
+          (async () => {
+            try {
+              // @ts-ignore
+              return (await (
+                actor as any
+              ).getAllApprovedAreaManagers()) as AreaManagerDto[];
+            } catch {
+              if (districtId !== undefined) {
+                return actor.getApprovedAreaManagersByDistrict(districtId);
+              }
+              return [] as AreaManagerDto[];
+            }
+          })(),
         ]);
 
-      // Auto-restore temp-rejected donors past their available-after date
       const now = Date.now();
       const toRestore = donorList.filter(
         (d) =>
@@ -279,6 +412,7 @@ export default function AMDashboard() {
       setDms(dmList);
       setDistricts(districtList);
       setAreaManagers(amList);
+      setAllAMs(allAMList);
       setAreas(areaList);
     } catch (err) {
       toast.error(`Failed to load data: ${err}`);
@@ -293,12 +427,38 @@ export default function AMDashboard() {
     try {
       const requests = await actor.getBloodRequestsForRecipient("am", amId);
       setReceivedRequests(requests);
+
+      const newCache: typeof senderCache = { ...senderCache };
+      const userRequests = requests.filter(
+        (r) => r.fromRole === "user" && !newCache[`user-${r.fromId}`],
+      );
+      await Promise.all(
+        userRequests.map(async (r) => {
+          try {
+            const u: UserDto = await actor.getUser(r.fromId);
+            newCache[`user-${r.fromId}`] = {
+              name: u.username,
+              contact: u.contact,
+              subtitle: "",
+              roleLabel: "User",
+            };
+          } catch {
+            newCache[`user-${r.fromId}`] = {
+              name: `User #${r.fromId}`,
+              contact: "",
+              subtitle: "",
+              roleLabel: "User",
+            };
+          }
+        }),
+      );
+      setSenderCache(newCache);
     } catch (err) {
       toast.error(`Failed to load received requests: ${err}`);
     } finally {
       setLoadingReceivedRequests(false);
     }
-  }, [actor, amId]);
+  }, [actor, amId, senderCache]);
 
   useEffect(() => {
     loadData();
@@ -393,7 +553,6 @@ export default function AMDashboard() {
     }
   };
 
-  // Not Attend: donor stays in appointed section, no status change
   const handleNotAttend = () => {
     setCalledDonor(null);
     toast("No change recorded — donor remains in Appoint section.");
@@ -402,7 +561,6 @@ export default function AMDashboard() {
   const handleDonated = async (donor: DonorDto) => {
     if (!actor) return;
     try {
-      // After donating, lock for 3 months using tempRejectedUntil
       const untilTs = BigInt(Date.now() + THREE_MONTHS_MS);
       await actor.updateDonorStatus(
         donor.id,
@@ -453,34 +611,55 @@ export default function AMDashboard() {
     }
   };
 
+  const handleForward = async (toRole: string, toId: bigint) => {
+    if (!actor || !forwardingRequest) return;
+    try {
+      await actor.forwardBloodRequest(forwardingRequest.id, toRole, toId);
+      toast.success("Request forwarded!");
+      setForwardingRequest(null);
+      await loadReceivedRequests();
+    } catch (err) {
+      toast.error(`Failed: ${err}`);
+    }
+  };
+
   const getDistrictName = (dId: bigint) =>
     districts.find((d) => d.id === dId)?.name ?? "Unknown District";
 
-  const getSenderInfo = (
-    fromRole: string,
-    fromId: bigint,
-  ): { name: string; subtitle: string; roleLabel: string } => {
+  const getSenderInfo = (fromRole: string, fromId: bigint) => {
     if (fromRole === "dm") {
       const dm = dms.find((d) => d.id === fromId);
       const distName = dm ? getDistrictName(dm.districtId) : "Unknown District";
       return {
         name: dm?.username ?? "Unknown Manager",
+        contact: dm?.contact ?? "",
         subtitle: distName,
         roleLabel: "District Manager",
       };
     }
     if (fromRole === "am") {
-      const am = areaManagers.find((a) => a.id === fromId);
+      const am =
+        areaManagers.find((a) => a.id === fromId) ||
+        allAMs.find((a) => a.id === fromId);
       const area = am ? areas.find((ar) => ar.id === am.areaId) : undefined;
       const distName = am ? getDistrictName(am.districtId) : "Unknown District";
-      const areaName = area?.name ?? "Unknown Area";
       return {
         name: am?.username ?? "Unknown Manager",
-        subtitle: `${areaName}, ${distName}`,
+        contact: am?.contact ?? "",
+        subtitle: `${area?.name ?? "Unknown Area"}, ${distName}`,
         roleLabel: "Area Manager",
       };
     }
-    return { name: "Unknown", subtitle: "", roleLabel: fromRole };
+    if (fromRole === "user") {
+      const cached = senderCache[`user-${fromId}`];
+      return {
+        name: cached?.name ?? `User #${fromId}`,
+        contact: cached?.contact ?? "",
+        subtitle: "",
+        roleLabel: "User",
+      };
+    }
+    return { name: "Unknown", contact: "", subtitle: "", roleLabel: fromRole };
   };
 
   const getStatusColor = (status: BloodRequestStatus) => {
@@ -494,6 +673,12 @@ export default function AMDashboard() {
       default:
         return "bg-gray-100 text-gray-700 border-gray-200";
     }
+  };
+
+  const getRoleBadgeColor = (role: string) => {
+    if (role === "dm") return "bg-purple-100 text-purple-700";
+    if (role === "am") return "bg-teal-100 text-teal-700";
+    return "bg-blue-100 text-blue-700";
   };
 
   const handleSaveProfile = () => {
@@ -531,7 +716,6 @@ export default function AMDashboard() {
           <p className="text-xs text-muted-foreground">
             Age: {donor.age.toString()} &bull; {donor.contact}
           </p>
-          {/* Show rejection reason for temp-rejected donors */}
           {donor.status === DonorStatus.tempRejected &&
             donor.tempRejectedReason && (
               <p className="text-xs text-amber-700 mt-0.5 font-medium">
@@ -623,13 +807,13 @@ export default function AMDashboard() {
 
       {donor.status === DonorStatus.tempRejected && (
         <div className="space-y-2">
-          <div className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {donor.tempRejectedUntil
               ? `Available after: ${new Date(Number(donor.tempRejectedUntil)).toLocaleDateString()}`
               : donor.rejectedAt
                 ? `Eligible again after ${new Date(Number(donor.rejectedAt) + THREE_MONTHS_MS).toLocaleDateString()}`
                 : "Temporarily rejected"}
-          </div>
+          </p>
           <button
             type="button"
             onClick={() => handleRestore(donor)}
@@ -676,28 +860,38 @@ export default function AMDashboard() {
           ? tempRejected
           : permRejected;
 
+  const ALL_TABS: Tab[] = [
+    "overview",
+    "donors",
+    "add-donor",
+    "requests",
+    "received-requests",
+    "feedback",
+    "chat",
+    "profile",
+  ];
   const TAB_LABELS: Record<Tab, string> = {
     overview: "Overview",
     donors: "Donors",
     "add-donor": "Add Donor",
     requests: "Send Request",
-    "received-requests": "Received Requests",
+    "received-requests": "Received",
+    feedback: "Feedback",
+    chat: "Chat",
     profile: "Profile",
   };
+
+  const sendToRole = sendTarget === "dm" ? "dm" : "am";
+  const sendToId =
+    sendTarget === "dm"
+      ? BigInt(dmForRequest || "0")
+      : BigInt(amForRequest || "0");
+  const canSend = sendTarget === "dm" ? !!dmForRequest : !!amForRequest;
 
   return (
     <div className="animate-slide-in-up">
       <div className="hidden md:flex gap-2 mb-6 flex-wrap">
-        {(
-          [
-            "overview",
-            "donors",
-            "add-donor",
-            "requests",
-            "received-requests",
-            "profile",
-          ] as Tab[]
-        ).map((t) => (
+        {ALL_TABS.map((t) => (
           <button
             type="button"
             key={t}
@@ -714,7 +908,7 @@ export default function AMDashboard() {
         ))}
       </div>
 
-      {/* Overview Tab */}
+      {/* Overview */}
       {activeTab === "overview" && (
         <div className="space-y-5" data-ocid="am.overview.section">
           <div className="grid grid-cols-2 gap-3">
@@ -756,7 +950,7 @@ export default function AMDashboard() {
         </div>
       )}
 
-      {/* Donors Tab */}
+      {/* Donors */}
       {activeTab === "donors" && (
         <div className="space-y-4" data-ocid="am.donors.section">
           <div className="flex gap-1.5 overflow-x-auto pb-1">
@@ -798,7 +992,6 @@ export default function AMDashboard() {
               );
             })}
           </div>
-
           {loading ? (
             <div
               className="flex justify-center py-10"
@@ -826,7 +1019,7 @@ export default function AMDashboard() {
         </div>
       )}
 
-      {/* Add Donor Tab */}
+      {/* Add Donor */}
       {activeTab === "add-donor" && (
         <div
           className="bg-white rounded-xl border border-border p-5 shadow-xs"
@@ -847,7 +1040,7 @@ export default function AMDashboard() {
         </div>
       )}
 
-      {/* Send Request Tab */}
+      {/* Send Request */}
       {activeTab === "requests" && (
         <div
           className="bg-white rounded-xl border border-border p-5 shadow-xs"
@@ -857,50 +1050,114 @@ export default function AMDashboard() {
             <Send size={18} className="text-destructive" /> Send Blood Request
           </h2>
           {!showRequestForm ? (
-            <>
-              <div className="mb-3">
-                <label
-                  htmlFor="am-dm-sel"
-                  className="block text-sm font-medium mb-1"
-                >
-                  Select District Manager
-                </label>
-                <select
-                  id="am-dm-sel"
-                  className="form-input"
-                  value={dmForRequest}
-                  onChange={(e) => setDmForRequest(e.target.value)}
-                  data-ocid="am.request.select"
-                >
-                  <option value="">Select DM</option>
-                  {dms.map((dm) => (
-                    <option key={dm.id.toString()} value={dm.id.toString()}>
-                      {getDistrictName(dm.districtId)} - {dm.username}
-                    </option>
-                  ))}
-                </select>
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-medium mb-2">Send To</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSendTarget("dm");
+                      setAmForRequest("");
+                    }}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                      sendTarget === "dm"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-white border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                    data-ocid="am.request.dm.toggle"
+                  >
+                    District Manager
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSendTarget("am");
+                      setDmForRequest("");
+                    }}
+                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                      sendTarget === "am"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-white border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                    data-ocid="am.request.am.toggle"
+                  >
+                    Area Manager
+                  </button>
+                </div>
               </div>
+              {sendTarget === "dm" && (
+                <div>
+                  <label
+                    htmlFor="am-dm-sel"
+                    className="block text-sm font-medium mb-1"
+                  >
+                    Select District Manager
+                  </label>
+                  <select
+                    id="am-dm-sel"
+                    className="form-input"
+                    value={dmForRequest}
+                    onChange={(e) => setDmForRequest(e.target.value)}
+                    data-ocid="am.request.select"
+                  >
+                    <option value="">Select DM</option>
+                    {dms.map((dm) => (
+                      <option key={dm.id.toString()} value={dm.id.toString()}>
+                        {getDistrictName(dm.districtId)} - {dm.username}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {sendTarget === "am" && (
+                <div>
+                  <label
+                    htmlFor="am-am-sel"
+                    className="block text-sm font-medium mb-1"
+                  >
+                    Select Area Manager
+                  </label>
+                  <select
+                    id="am-am-sel"
+                    className="form-input"
+                    value={amForRequest}
+                    onChange={(e) => setAmForRequest(e.target.value)}
+                    data-ocid="am.request.am.select"
+                  >
+                    <option value="">Select AM</option>
+                    {allAMs
+                      .filter((a) => a.id !== amId)
+                      .map((am) => (
+                        <option key={am.id.toString()} value={am.id.toString()}>
+                          {am.username} ({getDistrictName(am.districtId)})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
               <button
                 type="button"
                 className="btn-danger w-full"
                 onClick={() => setShowRequestForm(true)}
-                disabled={!dmForRequest}
+                disabled={!canSend}
                 data-ocid="am.request.primary_button"
               >
                 <span className="flex items-center justify-center gap-2">
                   <Send size={16} /> Continue
                 </span>
               </button>
-            </>
+            </div>
           ) : (
             <BloodRequestForm
               fromRole="am"
               fromId={amId ?? 0n}
-              toRole="dm"
-              toId={BigInt(dmForRequest || "0")}
+              toRole={sendToRole}
+              toId={sendToId}
               onSuccess={() => {
                 setShowRequestForm(false);
                 setDmForRequest("");
+                setAmForRequest("");
               }}
               onCancel={() => setShowRequestForm(false)}
             />
@@ -908,7 +1165,7 @@ export default function AMDashboard() {
         </div>
       )}
 
-      {/* Received Requests Tab */}
+      {/* Received Requests */}
       {activeTab === "received-requests" && (
         <div className="space-y-4" data-ocid="am.received_requests.section">
           <div className="flex items-center justify-between">
@@ -925,7 +1182,6 @@ export default function AMDashboard() {
               <RotateCcw size={12} /> Refresh
             </button>
           </div>
-
           {loadingReceivedRequests ? (
             <div
               className="flex justify-center py-12"
@@ -943,7 +1199,7 @@ export default function AMDashboard() {
                 No blood requests received yet
               </p>
               <p className="text-xs text-muted-foreground">
-                Requests forwarded by District Managers or Area Managers will
+                Requests from District Managers, Area Managers, or Users will
                 appear here.
               </p>
             </div>
@@ -957,7 +1213,6 @@ export default function AMDashboard() {
                     className="bg-white rounded-xl border border-border p-4 shadow-xs"
                     data-ocid={`am.received_requests.item.${i + 1}`}
                   >
-                    {/* Header: patient name + blood group + status */}
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -965,9 +1220,7 @@ export default function AMDashboard() {
                             {req.patientName}
                           </p>
                           <span
-                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${getStatusColor(
-                              req.status,
-                            )}`}
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${getStatusColor(req.status)}`}
                           >
                             {req.status.toString().toUpperCase()}
                           </span>
@@ -978,9 +1231,7 @@ export default function AMDashboard() {
                       </div>
                       <BloodGroupChip group={req.bloodGroup} />
                     </div>
-
-                    {/* Received From */}
-                    <div className="flex items-center gap-2 mb-3 p-2.5 bg-slate-50 rounded-lg border border-slate-100">
+                    <div className="flex items-start gap-2 mb-3 p-2.5 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex-1 min-w-0">
                         <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-0.5">
                           Received From
@@ -988,13 +1239,14 @@ export default function AMDashboard() {
                         <p className="text-sm font-semibold text-foreground truncate">
                           {sender.name}
                         </p>
+                        {sender.contact && (
+                          <p className="text-xs text-muted-foreground">
+                            {sender.contact}
+                          </p>
+                        )}
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           <span
-                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                              req.fromRole === "dm"
-                                ? "bg-purple-100 text-purple-700"
-                                : "bg-teal-100 text-teal-700"
-                            }`}
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${getRoleBadgeColor(req.fromRole)}`}
                           >
                             {sender.roleLabel}
                           </span>
@@ -1006,8 +1258,6 @@ export default function AMDashboard() {
                         </div>
                       </div>
                     </div>
-
-                    {/* Hospital info */}
                     <div className="space-y-1 mb-3">
                       <div className="flex items-start gap-1.5">
                         <span className="text-xs font-medium text-muted-foreground w-20 flex-shrink-0">
@@ -1034,8 +1284,6 @@ export default function AMDashboard() {
                         </span>
                       </div>
                     </div>
-
-                    {/* Attender info */}
                     <div className="space-y-1 mb-3">
                       <div className="flex items-start gap-1.5">
                         <span className="text-xs font-medium text-muted-foreground w-20 flex-shrink-0">
@@ -1064,9 +1312,15 @@ export default function AMDashboard() {
                         </div>
                       )}
                     </div>
-
-                    {/* Footer: created at */}
-                    <div className="pt-2 border-t border-border flex items-center justify-end">
+                    <div className="pt-2 border-t border-border flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setForwardingRequest(req)}
+                        className="text-xs px-3 py-1.5 rounded-full bg-secondary border border-border text-foreground font-semibold hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-colors"
+                        data-ocid={`am.received_requests.edit_button.${i + 1}`}
+                      >
+                        Forward
+                      </button>
                       <span className="text-xs text-muted-foreground">
                         {new Date(
                           Number(req.createdAt) / 1_000_000,
@@ -1081,7 +1335,20 @@ export default function AMDashboard() {
         </div>
       )}
 
-      {/* Profile Tab */}
+      {/* Feedback */}
+      {activeTab === "feedback" && <FeedbackSection userRole="am" />}
+
+      {/* Chat */}
+      {activeTab === "chat" && (
+        <div data-ocid="am.chat.section">
+          <h2 className="font-bold mb-4 flex items-center gap-2">
+            <MessageCircle size={18} className="text-destructive" /> Messages
+          </h2>
+          <ChatSection contacts={chatContacts} loadingContacts={chatLoading} />
+        </div>
+      )}
+
+      {/* Profile */}
       {activeTab === "profile" && (
         <div className="bg-white rounded-xl border border-border p-5 shadow-xs">
           <h2 className="font-bold mb-4 flex items-center gap-2">
@@ -1184,7 +1451,6 @@ export default function AMDashboard() {
           onClose={() => setAppointingDonor(null)}
         />
       )}
-
       {tempRejectingDonor && (
         <TempRejectModal
           donor={tempRejectingDonor}
@@ -1192,6 +1458,15 @@ export default function AMDashboard() {
             handleTempReject(tempRejectingDonor, availableAfter, reason)
           }
           onClose={() => setTempRejectingDonor(null)}
+        />
+      )}
+      {forwardingRequest && (
+        <ForwardModal
+          allDMs={dms}
+          allAMs={allAMs}
+          selfAmId={amId}
+          onForward={handleForward}
+          onClose={() => setForwardingRequest(null)}
         />
       )}
     </div>

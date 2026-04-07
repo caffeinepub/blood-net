@@ -86,6 +86,25 @@ export interface NoticeDto {
     fromRole: string;
     fromId: bigint;
 }
+export interface MessageDto {
+    id: bigint;
+    fromRole: string;
+    fromId: bigint;
+    toRole: string;
+    toId: bigint;
+    content: string;
+    createdAt: bigint;
+}
+export interface FeedbackDto {
+    id: bigint;
+    fromRole: string;
+    fromId: bigint;
+    toRole: string;
+    toId?: bigint;
+    itemType: string;
+    message: string;
+    createdAt: bigint;
+}
 export interface UserProfile {
     amId?: bigint;
     userId?: bigint;
@@ -132,18 +151,25 @@ export interface backendInterface {
     deleteDistrictManager(dmId: bigint): Promise<void>;
     deleteDonor(donorId: bigint): Promise<void>;
     forwardBloodRequest(requestId: bigint, toRole: string, toId: bigint): Promise<BloodRequestDto>;
+    getAllApprovedAreaManagers(): Promise<Array<AreaManagerDto>>;
+    getAllFeedback(): Promise<Array<FeedbackDto>>;
+    getAllUsers(): Promise<Array<UserDto>>;
     getApprovedAreaManagersByDistrict(districtId: bigint): Promise<Array<AreaManagerDto>>;
     getApprovedDistrictManagers(): Promise<Array<DistrictManagerDto>>;
     getArea(id: bigint): Promise<AreaDto>;
     getAreaManager(amId: bigint): Promise<AreaManagerDto>;
     getAreasByDistrict(districtId: bigint): Promise<Array<AreaDto>>;
     getBloodRequestsForRecipient(toRole: string, toId: bigint): Promise<Array<BloodRequestDto>>;
+    getBloodRequestsBySender(fromRole: string, fromId: bigint): Promise<Array<BloodRequestDto>>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
+    getConversationsForUser(role: string, id: bigint): Promise<Array<MessageDto>>;
     getDistrict(id: bigint): Promise<DistrictDto>;
     getDistrictManager(dmId: bigint): Promise<DistrictManagerDto>;
     getDistricts(): Promise<Array<DistrictDto>>;
     getDonorsByArea(areaId: bigint): Promise<Array<DonorDto>>;
+    getFeedbackForDashboard(role: string, id: bigint): Promise<Array<FeedbackDto>>;
+    getMessagesInThread(role1: string, id1: bigint, role2: string, id2: bigint): Promise<Array<MessageDto>>;
     getNoticesForRecipient(role: string, id: bigint): Promise<Array<NoticeDto>>;
     getPendingAreaManagersForDistrict(districtId: bigint): Promise<Array<AreaManagerDto>>;
     getPendingDistrictManagers(): Promise<Array<DistrictManagerDto>>;
@@ -157,6 +183,8 @@ export interface backendInterface {
     rejectDistrictManager(dmId: bigint): Promise<DistrictManagerDto>;
     restoreDonor(donorId: bigint): Promise<DonorDto>;
     saveCallerUserProfile(profile: UserProfile): Promise<void>;
+    sendMessage(fromRole: string, fromId: bigint, toRole: string, toId: bigint, content: string): Promise<MessageDto>;
     sendNotice(fromRole: string, fromId: bigint, toRole: string, toId: bigint | null, message: string): Promise<NoticeDto>;
+    submitFeedback(fromRole: string, fromId: bigint, toRole: string, toId: bigint | null, itemType: string, message: string): Promise<FeedbackDto>;
     updateDonorStatus(donorId: bigint, status: DonorStatus, rejectedAt: bigint | null, appointedAt: bigint | null, patientName: string | null, tempRejectedUntil: bigint | null, tempRejectedReason: string | null): Promise<DonorDto>;
 }

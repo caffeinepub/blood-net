@@ -5,7 +5,7 @@ import {
   Inbox,
   Loader2,
   MapPin,
-  Phone,
+  MessageCircle,
   Plus,
   Send,
   User,
@@ -20,9 +20,10 @@ import type {
   AreaManagerDto,
   BloodRequestDto,
   DistrictManagerDto,
-  NoticeDto,
 } from "../backend";
 import { BloodRequestForm } from "../components/BloodRequestForm";
+import { ChatSection, useDMChatContacts } from "../components/ChatSection";
+import { FeedbackSection } from "../components/FeedbackSection";
 import { StatusBadge } from "../components/StatusBadge";
 import {
   getStoredCreds,
@@ -37,6 +38,8 @@ type Tab =
   | "managers"
   | "requests"
   | "notices"
+  | "feedback"
+  | "chat"
   | "profile";
 type RequestSubTab = "send" | "received";
 
@@ -262,6 +265,9 @@ export default function DMDashboard() {
   const districtId = session?.districtId;
   const dmId = session?.id;
 
+  const { contacts: chatContacts, loading: chatLoading } =
+    useDMChatContacts(dmId);
+
   const loadData = useCallback(async () => {
     if (!actor || districtId === undefined || dmId === undefined) return;
     const [areaList, pendList, appList, dmList, reqList] = await Promise.all([
@@ -381,19 +387,32 @@ export default function DMDashboard() {
     setIsSavingProfile(false);
   };
 
+  const ALL_TABS: Tab[] = [
+    "areas",
+    "approvals",
+    "managers",
+    "requests",
+    "notices",
+    "feedback",
+    "chat",
+    "profile",
+  ];
+
+  const TAB_LABELS: Record<Tab, string> = {
+    areas: "Areas",
+    approvals: "Approvals",
+    managers: "Managers",
+    requests: "Requests",
+    notices: "Notices",
+    feedback: "Feedback",
+    chat: "Chat",
+    profile: "Profile",
+  };
+
   return (
     <div className="animate-slide-in-up">
       <div className="hidden md:flex gap-2 mb-6 flex-wrap">
-        {(
-          [
-            "areas",
-            "approvals",
-            "managers",
-            "requests",
-            "notices",
-            "profile",
-          ] as Tab[]
-        ).map((t) => (
+        {ALL_TABS.map((t) => (
           <button
             type="button"
             key={t}
@@ -405,7 +424,7 @@ export default function DMDashboard() {
             }`}
             data-ocid={`dm.${t}.tab`}
           >
-            {t}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -768,6 +787,19 @@ export default function DMDashboard() {
               `Send to ${approvedAMs.length} AMs`
             )}
           </button>
+        </div>
+      )}
+
+      {/* Feedback Tab */}
+      {activeTab === "feedback" && <FeedbackSection userRole="dm" />}
+
+      {/* Chat Tab */}
+      {activeTab === "chat" && (
+        <div data-ocid="dm.chat.section">
+          <h2 className="font-bold mb-4 flex items-center gap-2">
+            <MessageCircle size={18} className="text-destructive" /> Messages
+          </h2>
+          <ChatSection contacts={chatContacts} loadingContacts={chatLoading} />
         </div>
       )}
 
